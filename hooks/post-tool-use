@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shipworthy — Post-Tool-Use Hook
 # Fires after Bash commands (async). Advisory monitoring for commits and dependency changes.
+# Advisory only: never blocks. Every check is config-gated.
 
 set -euo pipefail
 
@@ -27,77 +28,91 @@ if [ -z "$COMMAND" ]; then
   exit 0
 fi
 
+# --- Resolve project root ---
+PROJECT_ROOT="$(timeout 2 git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
 MESSAGE=""
 
 # ============================================================
 # Monitor: git commit detected
+# Config: rules.commit_reminders (default: enabled)
 # ============================================================
 if echo "$COMMAND" | grep -q "git commit" 2>/dev/null; then
-  if echo "$COMMAND" | grep -q "\-\-amend" 2>/dev/null; then
-    sw_log warn post-tool-use "Commit --amend detected"
-    sw_signal "post-tool-use" "git" "amend-commit: may rewrite history"
-    MESSAGE="[shipworthy] Commit amend detected. Verify: Was this intentional? Amending rewrites history — avoid on shared/pushed branches. Did you run tests after the amend?"
-  else
-    sw_log info post-tool-use "Commit detected — verification reminder issued"
-    sw_signal "post-tool-use" "git" "commit: $(echo "$COMMAND" | head -c 200)"
-    MESSAGE="[shipworthy] Commit detected. Verify: Did you run tests? Did you verify the change works? Does it follow the architecture spec?"
+  if is_rule_enabled "commit_reminders" "$PROJECT_ROOT"; then
+    if echo "$COMMAND" | grep -q "\-\-amend" 2>/dev/null; then
+      sw_log warn post-tool-use "Commit --amend detected"
+      sw_signal "post-tool-use" "git" "amend-commit: may rewrite history"
+      MESSAGE="[shipworthy] Commit amend detected — just a reminder that amending rewrites history, so be careful on shared branches."
+    else
+      sw_log info post-tool-use "Commit detected"
+      sw_signal "post-tool-use" "git" "commit: $(echo "$COMMAND" | head -c 200)"
+      MESSAGE="[shipworthy] Commit detected. Quick reminder: have tests been run?"
+    fi
   fi
 fi
 
 # ============================================================
 # Monitor: dependency changes
+# Config: rules.dependency_review (default: enabled)
 # ============================================================
+if is_rule_enabled "dependency_review" "$PROJECT_ROOT"; then
+  # --- Installing existing dependencies (from lockfile/manifest) ---
+  if echo "$COMMAND" | grep -qE "^(npm ci|yarn install --frozen-lockfile|pnpm install --frozen-lockfile|pip install -r |go mod download|bundle install --deployment|cargo build)" 2>/dev/null; then
+    # These are installing existing dependencies, not adding new ones. No warning needed.
+    :
+  elif echo "$COMMAND" | grep -qE "^(npm install|yarn install|pnpm install|pip install -r|go mod download|bundle install)$" 2>/dev/null; then
+    # Plain install commands without flags — installing from existing manifest
+    :
+  # --- Adding a NEW dependency ---
+  elif echo "$COMMAND" | grep -qE "(npm install [a-zA-Z@]|yarn add |pnpm add |pip install [a-zA-Z]|go get |cargo add |gem install )" 2>/dev/null; then
+    # Extract what's being installed
+    DEP_NAME=""
+    if echo "$COMMAND" | grep -qE "npm install " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*npm install //' | awk '{print $1}')
+    elif echo "$COMMAND" | grep -qE "yarn add " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*yarn add //' | awk '{print $1}')
+    elif echo "$COMMAND" | grep -qE "pnpm add " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*pnpm add //' | awk '{print $1}')
+    elif echo "$COMMAND" | grep -qE "pip install " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*pip install //' | awk '{print $1}')
+    elif echo "$COMMAND" | grep -qE "go get " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*go get //' | awk '{print $1}')
+    elif echo "$COMMAND" | grep -qE "cargo add " 2>/dev/null; then
+      DEP_NAME=$(echo "$COMMAND" | sed 's/.*cargo add //' | awk '{print $1}')
+    fi
 
-# --- Installing existing dependencies (from lockfile/manifest) ---
-if echo "$COMMAND" | grep -qE "^(npm ci|yarn install --frozen-lockfile|pnpm install --frozen-lockfile|pip install -r |go mod download|bundle install --deployment|cargo build)" 2>/dev/null; then
-  # These are installing existing dependencies, not adding new ones. No warning needed.
-  :
-elif echo "$COMMAND" | grep -qE "^(npm install|yarn install|pnpm install|pip install -r|go mod download|bundle install)$" 2>/dev/null; then
-  # Plain install commands without flags — installing from existing manifest
-  :
-# --- Adding a NEW dependency ---
-elif echo "$COMMAND" | grep -qE "(npm install [a-zA-Z@]|yarn add |pnpm add |pip install [a-zA-Z]|go get |cargo add |gem install )" 2>/dev/null; then
-  # Extract what's being installed
-  DEP_NAME=""
-  if echo "$COMMAND" | grep -qE "npm install " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*npm install //' | awk '{print $1}')
-  elif echo "$COMMAND" | grep -qE "yarn add " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*yarn add //' | awk '{print $1}')
-  elif echo "$COMMAND" | grep -qE "pnpm add " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*pnpm add //' | awk '{print $1}')
-  elif echo "$COMMAND" | grep -qE "pip install " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*pip install //' | awk '{print $1}')
-  elif echo "$COMMAND" | grep -qE "go get " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*go get //' | awk '{print $1}')
-  elif echo "$COMMAND" | grep -qE "cargo add " 2>/dev/null; then
-    DEP_NAME=$(echo "$COMMAND" | sed 's/.*cargo add //' | awk '{print $1}')
-  fi
-
-  # Skip flags (things starting with -)
-  if [ -n "$DEP_NAME" ] && [[ "$DEP_NAME" != -* ]]; then
-    sw_log info post-tool-use "New dependency: $DEP_NAME"
-    sw_signal "post-tool-use" "dependency" "added: ${DEP_NAME}"
-    MESSAGE="[shipworthy] New dependency added: ${DEP_NAME}. Consider: Is it well-maintained? Are there known vulnerabilities? Is the license compatible? Is the bundle size impact acceptable? Update architecture spec if this changes the tech stack."
+    # Skip flags (things starting with -)
+    if [ -n "$DEP_NAME" ] && [[ "$DEP_NAME" != -* ]]; then
+      sw_log info post-tool-use "New dependency: $DEP_NAME"
+      sw_signal "post-tool-use" "dependency" "added: ${DEP_NAME}"
+      MESSAGE="[shipworthy] New dependency added: ${DEP_NAME}. FYI — worth a quick check on maintenance status and license compatibility."
+    fi
   fi
 fi
 
 # ============================================================
 # Monitor: force push detected
+# Config: rules.destructive_git (default: enabled)
 # ============================================================
-if echo "$COMMAND" | grep -qE "git push.*(--force|-f)" 2>/dev/null; then
-  sw_log warn post-tool-use "Force push detected"
-  sw_signal "post-tool-use" "git" "force-push: dangerous history rewrite"
-  MESSAGE="[shipworthy] Force push detected. This rewrites remote history. Verify: Is this a shared branch? Have other contributors pulled? Consider --force-with-lease instead."
+if is_rule_enabled "destructive_git" "$PROJECT_ROOT"; then
+  if echo "$COMMAND" | grep -qE "git push.*(--force|-f)" 2>/dev/null; then
+    sw_log warn post-tool-use "Force push detected"
+    sw_signal "post-tool-use" "git" "force-push: history rewrite"
+    MESSAGE="[shipworthy] Force push detected — just a heads up that this rewrites remote history."
+  fi
 fi
 
 # ============================================================
 # Monitor: database migration
+# Config: rules.migration_review (default: enabled)
 # ============================================================
-if echo "$COMMAND" | grep -qE "(migrate|migration|db:migrate|prisma migrate|alembic|knex migrate|typeorm migration)" 2>/dev/null; then
-  sw_log info post-tool-use "Database migration detected"
-  sw_signal "post-tool-use" "migration" "detected: $(echo "$COMMAND" | head -c 200)"
-  if [ -z "$MESSAGE" ]; then
-    MESSAGE="[shipworthy] Database migration detected. Verify: Is the migration reversible? Have you tested rollback? Is the migration safe for zero-downtime deployment?"
+if is_rule_enabled "migration_review" "$PROJECT_ROOT"; then
+  if echo "$COMMAND" | grep -qE "(migrate|migration|db:migrate|prisma migrate|alembic|knex migrate|typeorm migration)" 2>/dev/null; then
+    sw_log info post-tool-use "Database migration detected"
+    sw_signal "post-tool-use" "migration" "detected: $(echo "$COMMAND" | head -c 200)"
+    if [ -z "$MESSAGE" ]; then
+      MESSAGE="[shipworthy] Database migration detected. Consider: is the migration reversible? Safe for zero-downtime?"
+    fi
   fi
 fi
 

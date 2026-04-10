@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Shipworthy is an open-source Claude Code plugin that enforces production engineering practices across AI coding sessions. v1.4.1 with 64 skills, 6 hooks, 6 agents, 8 templates, 5 adapters, 3 presets, 7 commands.
+Shipworthy is an open-source Claude Code plugin that guides AI coding sessions toward production engineering practices. All checks are advisory by default — they suggest, never block. Every rule is configurable via `.shipworthy/config.json`. v1.5.0 with 64 skills, 6 hooks, 6 agents, 8 templates, 5 adapters, 3 presets, 7 commands.
 
 ## Repository Structure
 
@@ -24,13 +24,13 @@ skills/              64 engineering skills as SKILL.md files (YAML frontmatter +
   documentation/     Documentation as code
   meta/              Writing skills, retrospective
 hooks/               6 bash hook scripts + shared library
-  lib.sh             Shared utilities: JSON parsing, escaping, debug logging, transparency functions
+  lib.sh             Shared utilities: JSON parsing, escaping, debug logging, transparency, config helpers
   session-start      SessionStart hook — tier detection, arch spec loading, transparency banner
-  pre-tool-use       PreToolUse (Write|Edit) — secrets, eval, console.log detection
-  pre-tool-use-bash  PreToolUse (Bash) — destructive command detection
-  pre-push-validate  PreToolUse (Bash) — blocks git push if validation fails (90s timeout)
-  post-tool-use      PostToolUse (Bash) — commit, dependency, migration monitoring
-  post-tool-use-write PostToolUse (Write|Edit) — :any, test location, route validation
+  pre-tool-use       PreToolUse (Write|Edit) — secrets, eval, console.log suggestions (config-gated)
+  pre-tool-use-bash  PreToolUse (Bash) — destructive command heads-up (config-gated)
+  pre-push-validate  PreToolUse (Bash) — advisory pre-push check (blocks only in plugin repo or if user opts in)
+  post-tool-use      PostToolUse (Bash) — commit, dependency, migration suggestions (config-gated)
+  post-tool-use-write PostToolUse (Write|Edit) — :any, test location, route validation suggestions (config-gated)
 commands/            7 slash commands (Markdown): /audit, /context, /diagnose, /health, /retro, /scaffold, /validate
 agents/              6 agent personas (Markdown): code-reviewer, architecture-analyzer, security-auditor, test-strategist, project-doctor, pre-push-validator
 templates/           8 architecture templates: nextjs, express, fastapi, go-service, react-spa, generic-typescript, generic-python, monorepo
@@ -64,7 +64,10 @@ benchmarks/          Reproducible benchmark suite with scoring scripts
 - Transparency logging goes to stderr (ANSI colors, `sw_log`/`sw_check`/`sw_banner` functions)
 - Hooks must output valid JSON even on error (ERR trap)
 - Timeouts: session-start 5s, pre/post-tool-use 3s, pre-push-validate 90s
-- Advisory only (warn but don't block) except pre-push-validate which can block
+- **Advisory-first**: all hooks suggest, never block (except pre-push-validate in the plugin repo itself)
+- **Config-gated**: every check can be disabled via `rules.<name>: "off"` in `.shipworthy/config.json`
+- Available rule keys: `secrets`, `eval`, `env_files`, `console_log`, `destructive_commands`, `destructive_git`, `destructive_db`, `any_types`, `test_location`, `route_validation`, `push_validation`, `commit_reminders`, `dependency_review`, `migration_review`
+- Helper functions in lib.sh: `is_rule_enabled()`, `read_config_default()`, `is_ignored_path()`
 
 ### Transparency System
 - Shell track: `sw_log <level> <source> <message>` writes to stderr with ANSI colors
@@ -109,9 +112,11 @@ Benchmark prompts are written in **non-technical founder language** (e.g., "I ne
 
 ### Modifying a Hook
 1. Edit the hook script in `hooks/`
-2. Use `sw_log`/`sw_check` for transparency (they no-op if disabled)
-3. Ensure JSON output on stdout is not affected
-4. Run `bash tests/hooks/test-<hookname>.sh` and `test-transparency.sh`
+2. Gate every new check with `is_rule_enabled "rule_name" "$PROJECT_ROOT"` — no ungated checks
+3. Use suggestion tone ("consider", "heads up") — never prescriptive ("must", "violation")
+4. Use `sw_log`/`sw_check` for transparency (they no-op if disabled)
+5. Ensure JSON output on stdout is not affected
+6. Run `bash tests/hooks/test-<hookname>.sh` and `test-transparency.sh`
 
 ### Adding a Command/Agent
 1. Create Markdown file in `commands/` or `agents/`
@@ -124,10 +129,12 @@ Benchmark prompts are written in **non-technical founder language** (e.g., "I ne
 - Don't use `: any` in TypeScript examples — use `unknown` with type guards
 - Don't add dependencies — this is a zero-dependency project (bash + Markdown)
 - Don't break JSON output from hooks — always test with `validate_json()`
-- Don't write hooks that block (except pre-push-validate) — advisory only
+- Don't write hooks that block — advisory-first (suggest, never gate)
+- Don't hardcode rules without config gates — every check must be disable-able via `is_rule_enabled()`
+- Don't use prescriptive language in hook messages — use "consider", "heads up", "suggestion" not "violation", "error", "must"
 - Don't use relative dates in docs/learnings — always YYYY-MM-DD
 - Don't skip transparency announcements in skill/command/agent files
 
 ## Version
 
-v1.4.1 — Security Hardening (April 6, 2026)
+v1.5.0 — Advisory-First Revamp (April 9, 2026)

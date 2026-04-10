@@ -124,6 +124,34 @@ except: pass
   fi
 }
 
+# --- Check if a rule is enabled (not turned off in config) ---
+# Rules default to enabled. Only disabled when config says "off".
+# Usage: is_rule_enabled "console_log" "$PROJECT_ROOT"
+# Returns 0 (enabled / run the check) or 1 (disabled / skip it)
+is_rule_enabled() {
+  local rule_name="$1"
+  local project_root="${2:-.}"
+  local val
+  val=$(read_config "rules.${rule_name}" "$project_root" 2>/dev/null || true)
+  [ "$val" = "off" ] && return 1
+  return 0
+}
+
+# --- Read config with default ---
+# Usage: read_config_default "overrides.allow_console_log" "false" "$PROJECT_ROOT"
+read_config_default() {
+  local key_path="$1"
+  local default_val="$2"
+  local project_root="${3:-.}"
+  local val
+  val=$(read_config "$key_path" "$project_root" 2>/dev/null || true)
+  if [ -n "$val" ]; then
+    printf '%s' "$val"
+  else
+    printf '%s' "$default_val"
+  fi
+}
+
 # --- Check if path should be ignored ---
 # Usage: is_ignored_path "$FILE_PATH" "$PROJECT_ROOT"
 is_ignored_path() {

@@ -48,8 +48,8 @@ INPUT='{"tool_name":"Write","tool_input":{"file_path":"/tmp/test/src/index.ts","
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
   if echo "$OUTPUT" | grep -q '"approve"'; then
-    if echo "$OUTPUT" | grep -q 'Advisory'; then
-      fail "Normal write should not produce advisory" "Got: $OUTPUT"
+    if echo "$OUTPUT" | grep -q 'Suggestion'; then
+      fail "Normal write should not produce suggestion" "Got: $OUTPUT"
     else
       pass "Normal file write approved without warnings"
     fi
@@ -108,15 +108,15 @@ cleanup "$TMPDIR"
 # ---------------------------------------------------------------
 # Test 4: console.log in production file -> advisory warning
 # ---------------------------------------------------------------
-echo "Test 4: console.log in production file -> advisory warning"
+echo "Test 4: console.log in production file -> suggestion"
 TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Write","tool_input":{"file_path":"/tmp/test/src/service.ts","content":"console.log(\"debug info\"); export function run() {}"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'console.log\|structured logging'; then
-    pass "console.log in production code triggers warning"
+  if echo "$OUTPUT" | grep -qi 'console.log\|structured logger'; then
+    pass "console.log in production code triggers suggestion"
   else
-    fail "Expected console.log warning for production file" "Got: $OUTPUT"
+    fail "Expected console.log suggestion for production file" "Got: $OUTPUT"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -124,17 +124,17 @@ fi
 cleanup "$TMPDIR"
 
 # ---------------------------------------------------------------
-# Test 5: console.log in test file -> no warning
+# Test 5: console.log in test file -> no suggestion
 # ---------------------------------------------------------------
-echo "Test 5: console.log in test file -> no warning"
+echo "Test 5: console.log in test file -> no suggestion"
 TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Write","tool_input":{"file_path":"/tmp/test/src/service.test.ts","content":"console.log(\"test debug\"); test(\"it works\", () => {});"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'console.log\|structured logging'; then
-    fail "console.log in test file should not trigger warning" "Got: $OUTPUT"
+  if echo "$OUTPUT" | grep -qi 'console.log\|structured logger'; then
+    fail "console.log in test file should not trigger suggestion" "Got: $OUTPUT"
   else
-    pass "console.log in test file does not trigger warning"
+    pass "console.log in test file does not trigger suggestion"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -193,10 +193,10 @@ TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Bash","tool_input":{"command":"rm -rf /tmp/myproject"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$BASH_HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'destructive\|rm'; then
-    pass "rm -rf triggers warning"
+  if echo "$OUTPUT" | grep -qi 'destructive\|rm\|Heads up'; then
+    pass "rm -rf triggers heads-up"
   else
-    fail "Expected destructive rm warning" "Got: $OUTPUT"
+    fail "Expected destructive rm heads-up" "Got: $OUTPUT"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -211,10 +211,10 @@ TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$BASH_HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'force\|push'; then
-    pass "git push --force triggers warning"
+  if echo "$OUTPUT" | grep -qi 'force\|push\|Heads up'; then
+    pass "git push --force triggers heads-up"
   else
-    fail "Expected force push warning" "Got: $OUTPUT"
+    fail "Expected force push heads-up" "Got: $OUTPUT"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -229,10 +229,10 @@ TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Bash","tool_input":{"command":"git reset --hard HEAD~3"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$BASH_HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'reset.*hard\|discard'; then
-    pass "git reset --hard triggers warning"
+  if echo "$OUTPUT" | grep -qi 'reset.*hard\|discard\|Heads up'; then
+    pass "git reset --hard triggers heads-up"
   else
-    fail "Expected reset hard warning" "Got: $OUTPUT"
+    fail "Expected reset hard heads-up" "Got: $OUTPUT"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -247,10 +247,10 @@ TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Bash","tool_input":{"command":"psql -c \"DROP TABLE users;\""}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$BASH_HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'destructive\|DROP\|database'; then
-    pass "DROP TABLE triggers warning"
+  if echo "$OUTPUT" | grep -qi 'destructive\|DROP\|database\|Heads up'; then
+    pass "DROP TABLE triggers heads-up"
   else
-    fail "Expected destructive database warning" "Got: $OUTPUT"
+    fail "Expected destructive database heads-up" "Got: $OUTPUT"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"
@@ -265,10 +265,10 @@ TMPDIR=$(setup_temp_project)
 INPUT='{"tool_name":"Bash","tool_input":{"command":"npm test"}}'
 OUTPUT=$(cd "$TMPDIR" && echo "$INPUT" | "$BASH_HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'Warning\|destructive'; then
-    fail "Safe command should not trigger warning" "Got: $OUTPUT"
+  if echo "$OUTPUT" | grep -qi 'Heads up\|destructive'; then
+    fail "Safe command should not trigger heads-up" "Got: $OUTPUT"
   else
-    pass "Safe bash command produces no warning"
+    pass "Safe bash command produces no heads-up"
   fi
 else
   fail "Output is not valid JSON" "Got: $OUTPUT"

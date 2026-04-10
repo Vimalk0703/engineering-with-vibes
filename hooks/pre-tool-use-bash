@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shipworthy — Pre-Tool-Use Hook (Bash)
 # Fires before Bash commands. Catches destructive operations BEFORE execution.
-# Fast-path: only pattern-matches against known dangerous commands.
+# Advisory only: never blocks, only suggests. Every check is config-gated.
 
 set -euo pipefail
 
@@ -29,70 +29,88 @@ if [ -z "$COMMAND" ] && [ -z "$SEARCH_TARGET" ]; then
   exit 0
 fi
 
+# --- Resolve project root ---
+PROJECT_ROOT="$(timeout 2 git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
 sw_log security pre-tool-use-bash "Scanning: $(echo "$SEARCH_TARGET" | head -c 60)"
 
 WARNINGS=""
 
 # ============================================================
 # Check 1: Destructive file operations
+# Config: rules.destructive_commands (default: enabled)
 # ============================================================
-if echo "$SEARCH_TARGET" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive|--force)' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Destructive rm" warn
-  WARNINGS="${WARNINGS}Destructive rm command detected (recursive/force). Verify target paths carefully. "
+if is_rule_enabled "destructive_commands" "$PROJECT_ROOT"; then
+  if echo "$SEARCH_TARGET" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|--recursive|--force)' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Destructive rm" warn
+    WARNINGS="${WARNINGS}Heads up: destructive rm detected (recursive/force). Double-check the target paths. "
+  fi
 fi
 
 # ============================================================
 # Check 2: Destructive git operations
+# Config: rules.destructive_git (default: enabled)
 # ============================================================
-if echo "$SEARCH_TARGET" | grep -qE 'git\s+push\s+.*(--force\b|-f\b)' 2>/dev/null; then
-  if ! echo "$SEARCH_TARGET" | grep -q 'force-with-lease' 2>/dev/null; then
-    sw_check pre-tool-use-bash "Force push" warn
-    WARNINGS="${WARNINGS}git push --force detected. This rewrites remote history. Consider --force-with-lease instead. "
+if is_rule_enabled "destructive_git" "$PROJECT_ROOT"; then
+  if echo "$SEARCH_TARGET" | grep -qE 'git\s+push\s+.*(--force\b|-f\b)' 2>/dev/null; then
+    if ! echo "$SEARCH_TARGET" | grep -q 'force-with-lease' 2>/dev/null; then
+      sw_check pre-tool-use-bash "Force push" warn
+      WARNINGS="${WARNINGS}Heads up: git push --force rewrites remote history. Consider --force-with-lease as a safer alternative. "
+    fi
   fi
-fi
 
-if echo "$SEARCH_TARGET" | grep -qE 'git\s+reset\s+--hard' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Hard reset" warn
-  WARNINGS="${WARNINGS}git reset --hard detected. This discards uncommitted changes permanently. "
-fi
+  if echo "$SEARCH_TARGET" | grep -qE 'git\s+reset\s+--hard' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Hard reset" warn
+    WARNINGS="${WARNINGS}Heads up: git reset --hard discards uncommitted changes permanently. "
+  fi
 
-if echo "$SEARCH_TARGET" | grep -qE 'git\s+clean\s+-[a-zA-Z]*f' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Git clean" warn
-  WARNINGS="${WARNINGS}git clean -f detected. This permanently removes untracked files. "
-fi
+  if echo "$SEARCH_TARGET" | grep -qE 'git\s+clean\s+-[a-zA-Z]*f' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Git clean" warn
+    WARNINGS="${WARNINGS}Heads up: git clean -f permanently removes untracked files. "
+  fi
 
-if echo "$SEARCH_TARGET" | grep -qE 'git\s+checkout\s+--\s+\.' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Checkout discard" warn
-  WARNINGS="${WARNINGS}git checkout -- . detected. This discards all unstaged changes. "
-fi
+  if echo "$SEARCH_TARGET" | grep -qE 'git\s+checkout\s+--\s+\.' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Checkout discard" warn
+    WARNINGS="${WARNINGS}Heads up: git checkout -- . discards all unstaged changes. "
+  fi
 
-if echo "$SEARCH_TARGET" | grep -qE 'git\s+branch\s+-D' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Force branch delete" warn
-  WARNINGS="${WARNINGS}git branch -D detected. This force-deletes a branch regardless of merge status. "
+  if echo "$SEARCH_TARGET" | grep -qE 'git\s+branch\s+-D' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Force branch delete" warn
+    WARNINGS="${WARNINGS}Heads up: git branch -D force-deletes a branch regardless of merge status. "
+  fi
 fi
 
 # ============================================================
 # Check 3: Destructive database operations
+# Config: rules.destructive_db (default: enabled)
 # ============================================================
-if echo "$SEARCH_TARGET" | grep -qiE '(DROP\s+(TABLE|DATABASE|SCHEMA|INDEX)|TRUNCATE\s+TABLE|DELETE\s+FROM\s+[a-zA-Z]+\s*;)' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Destructive DB op" warn
-  WARNINGS="${WARNINGS}Destructive database operation detected (DROP/TRUNCATE/DELETE without WHERE). Verify this is intentional. "
+if is_rule_enabled "destructive_db" "$PROJECT_ROOT"; then
+  if echo "$SEARCH_TARGET" | grep -qiE '(DROP\s+(TABLE|DATABASE|SCHEMA|INDEX)|TRUNCATE\s+TABLE|DELETE\s+FROM\s+[a-zA-Z]+\s*;)' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Destructive DB op" warn
+    WARNINGS="${WARNINGS}Heads up: destructive database operation detected (DROP/TRUNCATE/DELETE). Verify this is intentional. "
+  fi
 fi
 
 # ============================================================
 # Check 4: Docker/container destructive operations
+# Config: rules.destructive_commands (default: enabled)
 # ============================================================
-if echo "$SEARCH_TARGET" | grep -qE 'docker\s+(system\s+prune|container\s+prune|image\s+prune|volume\s+prune)' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Docker prune" warn
-  WARNINGS="${WARNINGS}Docker prune command detected. This permanently removes stopped containers/unused images/volumes. "
+if is_rule_enabled "destructive_commands" "$PROJECT_ROOT"; then
+  if echo "$SEARCH_TARGET" | grep -qE 'docker\s+(system\s+prune|container\s+prune|image\s+prune|volume\s+prune)' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Docker prune" warn
+    WARNINGS="${WARNINGS}Heads up: docker prune removes stopped containers/unused images/volumes. "
+  fi
 fi
 
 # ============================================================
 # Check 5: Process killing
+# Config: rules.destructive_commands (default: enabled)
 # ============================================================
-if echo "$SEARCH_TARGET" | grep -qE 'kill\s+-9|killall|pkill' 2>/dev/null; then
-  sw_check pre-tool-use-bash "Process kill" warn
-  WARNINGS="${WARNINGS}Process kill command detected. Verify the target process is correct. "
+if is_rule_enabled "destructive_commands" "$PROJECT_ROOT"; then
+  if echo "$SEARCH_TARGET" | grep -qE 'kill\s+-9|killall|pkill' 2>/dev/null; then
+    sw_check pre-tool-use-bash "Process kill" warn
+    WARNINGS="${WARNINGS}Heads up: process kill detected. Verify the target process. "
+  fi
 fi
 
 # ============================================================
@@ -100,8 +118,8 @@ fi
 # ============================================================
 if [ -n "$WARNINGS" ]; then
   ESCAPED_WARNINGS=$(printf '%s' "$WARNINGS" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
-  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"[shipworthy] Warning: ${ESCAPED_WARNINGS}\"}}"
+  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"[shipworthy] Heads up: ${ESCAPED_WARNINGS}\"}}"
 else
-  sw_log security pre-tool-use-bash "All checks passed ✓"
+  sw_log security pre-tool-use-bash "All checks passed"
   echo '{"hookSpecificOutput":{"decision":"approve"}}'
 fi

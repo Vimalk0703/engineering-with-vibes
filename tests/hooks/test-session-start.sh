@@ -81,14 +81,14 @@ cleanup "$TMPDIR"
 # ---------------------------------------------------------------
 # Test 3: Without architecture.md, shows NOT FOUND message
 # ---------------------------------------------------------------
-echo "Test 3: No architecture.md -> NOT FOUND message"
+echo "Test 3: No architecture.md -> optional notice"
 TMPDIR=$(setup_temp_project)
 OUTPUT=$(cd "$TMPDIR" && "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -q "NO ARCHITECTURE SPECIFICATION FOUND"; then
-    pass "NOT FOUND message displayed"
+  if echo "$OUTPUT" | grep -q "ARCHITECTURE SPECIFICATION"; then
+    pass "Architecture notice displayed"
   else
-    fail "NOT FOUND message missing"
+    fail "Architecture notice missing"
   fi
 else
   fail "Output is not valid JSON without architecture.md"
@@ -269,17 +269,17 @@ cleanup "$TMPDIR"
 # ---------------------------------------------------------------
 # Test 12: Fast diagnosis - no .gitignore detected
 # ---------------------------------------------------------------
-echo "Test 12: Fast diagnosis - no .gitignore = gap detected"
+echo "Test 12: Fast diagnosis - no .gitignore = suggestion detected"
 TMPDIR=$(setup_temp_project)
 echo '{"name":"test","version":"1.0.0"}' > "$TMPDIR/package.json"
 mkdir -p "$TMPDIR/tests"
 echo "test('x', () => {});" > "$TMPDIR/tests/a.test.js"
 OUTPUT=$(cd "$TMPDIR" && "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'PROJECT HEALTH'; then
-    pass "Fast diagnosis surfaces project health"
+  if echo "$OUTPUT" | grep -qi 'Status\|suggestion'; then
+    pass "Fast diagnosis surfaces project status"
   else
-    fail "Expected PROJECT HEALTH section in output" "Output snippet: $(echo "$OUTPUT" | head -c 400)"
+    fail "Expected project status section in output" "Output snippet: $(echo "$OUTPUT" | head -c 400)"
   fi
 else
   fail "Output not valid JSON for diagnosis test"
@@ -302,10 +302,10 @@ echo ".env" > "$TMPDIR/.gitignore"
 echo '{"extends":["eslint:recommended"]}' > "$TMPDIR/.eslintrc.json"
 OUTPUT=$(cd "$TMPDIR" && "$HOOK_PATH" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -qi 'all checks passed'; then
-    pass "Well-configured project passes all checks"
+  if echo "$OUTPUT" | grep -qi 'looking good'; then
+    pass "Well-configured project shows looking good"
   else
-    fail "Expected 'all checks passed' for well-configured project" "Output snippet: $(echo "$OUTPUT" | head -c 400)"
+    fail "Expected 'looking good' for well-configured project" "Output snippet: $(echo "$OUTPUT" | head -c 400)"
   fi
 else
   fail "Output not valid JSON for well-configured project"

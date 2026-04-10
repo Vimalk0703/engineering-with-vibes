@@ -128,27 +128,23 @@ except: pass
   fi
 fi
 
-# --- Fast Project Diagnosis (lightweight gap detection) ---
+# --- Fast Project Diagnosis (lightweight, suggestion-based) ---
 diagnose_gaps() {
-  local gaps=""
-  local gap_count=0
-  local max_severity="none"
+  local suggestions=""
+  local suggestion_count=0
 
   # Check: .gitignore exists
   if [ ! -f "$PROJECT_ROOT/.gitignore" ]; then
-    gaps="${gaps}no .gitignore, "
-    gap_count=$((gap_count + 1))
-    max_severity="medium"
+    suggestions="${suggestions}consider adding .gitignore, "
+    suggestion_count=$((suggestion_count + 1))
   fi
 
-  # Check: .env in .gitignore (critical)
+  # Check: .env in .gitignore
   if [ -f "$PROJECT_ROOT/.gitignore" ]; then
     if ! grep -q '\.env' "$PROJECT_ROOT/.gitignore" 2>/dev/null; then
-      # Only flag if .env files exist or the project has code
-      if [ -f "$PROJECT_ROOT/.env" ] || [ "$TIER" != "builder" ]; then
-        gaps="${gaps}.env not in .gitignore, "
-        gap_count=$((gap_count + 1))
-        max_severity="critical"
+      if [ -f "$PROJECT_ROOT/.env" ]; then
+        suggestions="${suggestions}consider adding .env to .gitignore, "
+        suggestion_count=$((suggestion_count + 1))
       fi
     fi
   fi
@@ -159,9 +155,8 @@ diagnose_gaps() {
     local test_count
     test_count=$(timeout 2 find "$PROJECT_ROOT" -maxdepth 3 -type f \( -name "*.test.*" -o -name "*.spec.*" -o -name "test_*.py" -o -name "*_test.go" \) -not -path "*/node_modules/*" -not -path "*/.venv/*" 2>/dev/null | head -3 | wc -l | tr -d ' ')
     if [ "$test_count" -eq 0 ] && [ "$TIER" != "builder" ]; then
-      gaps="${gaps}no tests, "
-      gap_count=$((gap_count + 1))
-      if [ "$max_severity" != "critical" ]; then max_severity="high"; fi
+      suggestions="${suggestions}tests not detected yet, "
+      suggestion_count=$((suggestion_count + 1))
     fi
   fi
 
@@ -171,9 +166,8 @@ diagnose_gaps() {
      [ ! -f "$PROJECT_ROOT/.circleci/config.yml" ] && \
      [ ! -f "$PROJECT_ROOT/Jenkinsfile" ]; then
     if [ "$TIER" = "engineer" ] || [ "$TIER" = "maker" ]; then
-      gaps="${gaps}no CI, "
-      gap_count=$((gap_count + 1))
-      if [ "$max_severity" = "none" ]; then max_severity="medium"; fi
+      suggestions="${suggestions}CI not detected yet, "
+      suggestion_count=$((suggestion_count + 1))
     fi
   fi
 
@@ -185,32 +179,22 @@ diagnose_gaps() {
      [ -f "$PROJECT_ROOT/.golangci.yml" ]; then
     has_linter="true"
   fi
-  # Check pyproject.toml for ruff config
   if [ "$has_linter" = "false" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
     if grep -q '\[tool\.ruff\]' "$PROJECT_ROOT/pyproject.toml" 2>/dev/null; then
       has_linter="true"
     fi
   fi
   if [ "$has_linter" = "false" ] && [ "$TIER" != "builder" ]; then
-    gaps="${gaps}no linter, "
-    gap_count=$((gap_count + 1))
-    if [ "$max_severity" = "none" ]; then max_severity="medium"; fi
-  fi
-
-  # Check: architecture spec exists
-  if [ ! -f "$PROJECT_ROOT/.shipworthy/architecture.md" ]; then
-    gaps="${gaps}no architecture spec, "
-    gap_count=$((gap_count + 1))
-    if [ "$max_severity" = "none" ]; then max_severity="low"; fi
+    suggestions="${suggestions}linter not detected yet, "
+    suggestion_count=$((suggestion_count + 1))
   fi
 
   # Output result
-  if [ "$gap_count" -eq 0 ]; then
-    echo "all checks passed"
+  if [ "$suggestion_count" -eq 0 ]; then
+    echo "looking good"
   else
-    # Remove trailing comma and space
-    gaps="${gaps%, }"
-    echo "${gap_count} gaps (${max_severity}): ${gaps}"
+    suggestions="${suggestions%, }"
+    echo "${suggestion_count} suggestion(s): ${suggestions}"
   fi
 }
 
@@ -231,21 +215,16 @@ CONTEXT="$CONTEXT
 
 ---
 
-## USER EXPERIENCE TIER: $(echo "$TIER" | tr '[:lower:]' '[:upper:]')
+## PROJECT CONTEXT
 
-Detected tier: **$TIER**
-- **builder**: Project has no code or no tests. Focus on scaffolding, generating code, and introducing testing gradually. Use streamlined workflows. Skip advanced planning unless the user asks for it.
-- **maker**: Project has code and some tests but lacks CI or architecture spec. Use standard workflows. Encourage adding CI and architecture documentation.
-- **engineer**: Project has code, tests, CI, and/or architecture spec. Use full engineering workflows. Enforce all quality gates and verification standards.
+**Tier**: $(echo "$TIER" | tr '[:lower:]' '[:upper:]') — this guides which skills and workflows are most relevant.
+- **builder**: Early stage — focus on getting things working. Streamlined workflows.
+- **maker**: Has code and tests — standard workflows, can benefit from CI and architecture docs when ready.
+- **engineer**: Mature setup — full engineering workflows available.
 
-Adapt skill behavior to this tier. For example:
-- Brainstorming: 3-step for builder/maker, full 5-step for engineer
-- Quality gates: relaxed for builder, standard for maker, strict for engineer
-- Architecture awareness: suggest for builder, recommend for maker, require for engineer
+**Status**: $PROJECT_HEALTH
 
-## PROJECT HEALTH: $PROJECT_HEALTH
-
-Run \`/diagnose\` for a full infrastructure diagnosis with auto-fix options."
+Run \`/diagnose\` for a detailed project overview."
 
 # --- Inject preset information if loaded ---
 if [ -n "$PRESET_NAME" ]; then
@@ -288,10 +267,10 @@ if [ -f "$ARCH_SPEC_PATH" ]; then
 
 ---
 
-## PROJECT ARCHITECTURE SPECIFICATION (AUTO-LOADED)
+## PROJECT ARCHITECTURE SPECIFICATION
 
 The following architecture specification was generated for this project.
-These Mandatory Rules are FIRST-CLASS CONSTRAINTS — treat them with the same priority as user instructions.
+These are the project's documented conventions and guidelines.
 
 $ARCH_SPEC"
 
@@ -334,18 +313,9 @@ else
 
 ---
 
-## NO ARCHITECTURE SPECIFICATION FOUND
+## ARCHITECTURE SPECIFICATION
 
-This project does not yet have an architecture specification at \`.shipworthy/architecture.md\`.
-
-**On the first substantive coding request**, invoke the \`architecture-awareness\` skill to:
-1. Detect the project type and tech stack
-2. Analyze existing patterns (if any code exists)
-3. Generate an architecture specification
-4. Present it to the user for approval
-
-Do NOT block the user's first request — but weave architecture discovery into the work naturally.
-If the user explicitly says they don't want an architecture spec, respect that and proceed without one."
+No architecture spec found at \`.shipworthy/architecture.md\`. This is optional — the \`architecture-awareness\` skill can generate one when you're ready. Just ask."
 fi
 
 # --- Load regression fence if present ---
@@ -359,10 +329,10 @@ if [ -f "$FENCE_PATH" ]; then
 
 ---
 
-## REGRESSION FENCE (AUTO-LOADED)
+## REGRESSION FENCE
 
-Known anti-patterns for this project. Identified in previous sessions via /retro.
-Treat each rule as a HARD CONSTRAINT — violating these means repeating a known mistake.
+Known anti-patterns for this project, identified in previous sessions via /retro.
+These document past issues worth avoiding.
 
 $FENCE_CONTENT
 
@@ -489,26 +459,10 @@ if [ -f "$SIGNALS_FILE" ]; then
 
 ---
 
-## AUTO-RETRO: UNPROCESSED SESSION SIGNALS
+## SESSION SIGNALS (from previous session)
 
-There are **${SIGNAL_COUNT} captured signal(s)** from the previous session in \`.shipworthy/.session-signals\`.
-These were automatically captured by hooks (commits, security warnings, pattern detections, dependency changes).
-
-**BEFORE starting new work**, process these signals:
-1. Read \`.shipworthy/.session-signals\`
-2. Group by category (security, pattern, dependency, git, migration, fence-violation)
-3. For any repeated patterns or security warnings, propose regression fence entries:
-   - Format: \`## NEVER [verb] [what] — [anchored to file path if possible]\`
-   - Include a 1-line explanation with date
-4. For dependency additions or migration events, propose learnings entries
-5. Present a brief table: \`| # | Proposed Rule | Source | Destination |\`
-6. Ask: \"Approve these context updates? (yes / select items / skip)\"
-7. After processing, delete \`.shipworthy/.session-signals\`
-
-Signal preview (last 20):
-\`\`\`
-${SIGNAL_PREVIEW}
-\`\`\`"
+**${SIGNAL_COUNT} signal(s)** captured in \`.shipworthy/.session-signals\`.
+Run \`/retro\` when convenient to review them and capture learnings."
   fi
 fi
 

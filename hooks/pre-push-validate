@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 # Shipworthy — Pre-Push Validation Hook
-# Fires before Bash commands. If the command is `git push`, runs the full
-# validation suite and BLOCKS the push if any check fails.
-# This hook runs with a longer timeout (90s) than other hooks.
+# Fires before Bash commands. If the command is `git push`, runs validation.
+#
+# BEHAVIOR:
+# - In the Shipworthy plugin repo itself: runs tests/validate-all.sh (blocks on failure)
+# - In a user's project: advisory by default (suggests running tests)
+#   - Configure with rules.push_validation in .shipworthy/config.json:
+#     "off"   = skip entirely
+#     "check" = run user's test command and advise on failure (default)
+#     "block" = run user's test command and block push on failure
+#   - Configure test command with push_validation_command in .shipworthy/config.json
+#     e.g., "npm test", "pytest", "make test"
+#     Auto-detects if not set.
 
 set -euo pipefail
 
@@ -41,69 +50,129 @@ if echo "$COMMAND" | grep -qE 'git\s+push\s+.*--tags' 2>/dev/null; then
   exit 0
 fi
 
-# --- Check if we're inside the Shipworthy plugin repo itself ---
-# The validation suite lives in the plugin root. If we're pushing from
-# a user's project (not the plugin repo), skip plugin-level validation.
-VALIDATE_SCRIPT="$PLUGIN_ROOT/tests/validate-all.sh"
-if [ ! -f "$VALIDATE_SCRIPT" ]; then
-  echo '{"hookSpecificOutput":{"decision":"approve"}}'
-  exit 0
-fi
-
-# --- Also check if the current working directory IS the plugin repo ---
-# If the user is in their own project that installed shipworthy, don't
-# run shipworthy's internal tests — only run if we're IN the shipworthy repo
+# --- Resolve current repo root ---
 CURRENT_REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 if [ -z "$CURRENT_REPO_ROOT" ]; then
   echo '{"hookSpecificOutput":{"decision":"approve"}}'
   exit 0
 fi
 
-# Check if validate-all.sh exists in the current repo (not just the plugin)
-REPO_VALIDATE="$CURRENT_REPO_ROOT/tests/validate-all.sh"
-if [ ! -f "$REPO_VALIDATE" ]; then
-  # Not a shipworthy-structured repo, just approve
+PROJECT_ROOT="$CURRENT_REPO_ROOT"
+
+# --- Check if rule is disabled ---
+if ! is_rule_enabled "push_validation" "$PROJECT_ROOT"; then
+  sw_log info pre-push-validate "Push validation disabled by config"
   echo '{"hookSpecificOutput":{"decision":"approve"}}'
   exit 0
 fi
 
-# --- Run the validation suite ---
-debug_log "pre-push-validate" "git push detected, running validation suite"
-sw_log info pre-push-validate "Git push detected — running validation suite"
+# ============================================================
+# Path A: Shipworthy plugin repo itself
+# If validate-all.sh exists in the CURRENT repo, this is the
+# plugin repo — run full internal validation and block on failure.
+# ============================================================
+REPO_VALIDATE="$CURRENT_REPO_ROOT/tests/validate-all.sh"
+if [ -f "$REPO_VALIDATE" ]; then
+  # Verify this is actually the shipworthy plugin by checking for skills/ dir
+  if [ -d "$CURRENT_REPO_ROOT/skills" ] && [ -d "$CURRENT_REPO_ROOT/hooks" ]; then
+    debug_log "pre-push-validate" "In Shipworthy plugin repo — running internal validation"
+    sw_log info pre-push-validate "Git push detected — running plugin validation suite"
 
-VALIDATION_OUTPUT=""
-VALIDATION_EXIT=0
+    VALIDATION_OUTPUT=""
+    VALIDATION_EXIT=0
+    VALIDATION_OUTPUT=$(bash "$REPO_VALIDATE" 2>&1) || VALIDATION_EXIT=$?
 
-VALIDATION_OUTPUT=$(bash "$REPO_VALIDATE" 2>&1) || VALIDATION_EXIT=$?
+    if [ "$VALIDATION_EXIT" -ne 0 ]; then
+      sw_log block pre-push-validate "Validation FAILED — push blocked"
+      FAILURES=$(echo "$VALIDATION_OUTPUT" | grep -E '✗' | head -5 || true)
+      if [ -z "$FAILURES" ]; then
+        FAILURES="Validation failed. Run 'bash tests/validate-all.sh' for details."
+      fi
 
-if [ "$VALIDATION_EXIT" -ne 0 ]; then
-  sw_log block pre-push-validate "Validation FAILED — push blocked"
-  # --- BLOCK the push ---
-  # Extract the summary section for a concise error message
-  FAILURES=$(echo "$VALIDATION_OUTPUT" | grep -E '✗' | head -5 || true)
-
-  if [ -z "$FAILURES" ]; then
-    FAILURES="Validation failed. Run 'bash tests/validate-all.sh' for details."
-  fi
-
-  BLOCK_MSG="[shipworthy] Pre-push validation FAILED. Push blocked until all checks pass.
+      BLOCK_MSG="[shipworthy] Pre-push validation FAILED. Push blocked until all checks pass.
 
 ${FAILURES}
 
 Run 'bash tests/validate-all.sh' to see full details and fix the issues."
 
-  ESCAPED_MSG=$(escape_json "$BLOCK_MSG" 2>/dev/null || printf '%s' "$BLOCK_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')
+      ESCAPED_MSG=$(escape_json "$BLOCK_MSG" 2>/dev/null || printf '%s' "$BLOCK_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')
+      echo "{\"hookSpecificOutput\":{\"decision\":\"block\",\"reason\":\"${ESCAPED_MSG}\"}}"
+      exit 0
+    fi
 
-  echo "{\"hookSpecificOutput\":{\"decision\":\"block\",\"reason\":\"${ESCAPED_MSG}\"}}"
+    PASS_COUNT=$(echo "$VALIDATION_OUTPUT" | grep -oE 'Passed: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "all")
+    sw_log info pre-push-validate "Validation passed ($PASS_COUNT/8) — push approved"
+    APPROVE_MSG="[shipworthy] Pre-push validation passed ($PASS_COUNT/8 checks). Safe to push."
+    ESCAPED_MSG=$(printf '%s' "$APPROVE_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
+    echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"${ESCAPED_MSG}\"}}"
+    exit 0
+  fi
+fi
+
+# ============================================================
+# Path B: User's project
+# Run the user's test/lint command if configured, or auto-detect.
+# Default behavior: advisory (suggest, don't block).
+# ============================================================
+PUSH_MODE=$(read_config_default "rules.push_validation" "check" "$PROJECT_ROOT" 2>/dev/null || echo "check")
+
+# Get user's configured test command, or auto-detect
+TEST_CMD=$(read_config "push_validation_command" "$PROJECT_ROOT" 2>/dev/null || true)
+
+if [ -z "$TEST_CMD" ]; then
+  # Auto-detect test command
+  if [ -f "$PROJECT_ROOT/package.json" ]; then
+    if grep -q '"test"' "$PROJECT_ROOT/package.json" 2>/dev/null; then
+      TEST_CMD="npm test"
+    fi
+  elif [ -f "$PROJECT_ROOT/Makefile" ]; then
+    if grep -q '^test:' "$PROJECT_ROOT/Makefile" 2>/dev/null; then
+      TEST_CMD="make test"
+    fi
+  elif [ -f "$PROJECT_ROOT/pyproject.toml" ] || [ -f "$PROJECT_ROOT/setup.py" ]; then
+    if command -v pytest &>/dev/null; then
+      TEST_CMD="pytest"
+    fi
+  elif [ -f "$PROJECT_ROOT/go.mod" ]; then
+    TEST_CMD="go test ./..."
+  elif [ -f "$PROJECT_ROOT/Cargo.toml" ]; then
+    TEST_CMD="cargo test"
+  fi
+fi
+
+# If no test command found, just approve with a gentle suggestion
+if [ -z "$TEST_CMD" ]; then
+  sw_log info pre-push-validate "No test command detected — approving push"
+  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"[shipworthy] Pushing — consider adding tests if you haven't already.\"}}"
   exit 0
 fi
 
-# --- APPROVE the push ---
-# Extract pass count from summary
-PASS_COUNT=$(echo "$VALIDATION_OUTPUT" | grep -oE 'Passed: [0-9]+' | head -1 | grep -oE '[0-9]+' || echo "all")
+sw_log info pre-push-validate "Git push detected — running: $TEST_CMD"
 
-sw_log info pre-push-validate "Validation passed ($PASS_COUNT/8) — push approved ✓"
-APPROVE_MSG="[shipworthy] Pre-push validation passed ($PASS_COUNT/8 checks). Safe to push."
-ESCAPED_MSG=$(printf '%s' "$APPROVE_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
+VALIDATION_OUTPUT=""
+VALIDATION_EXIT=0
+VALIDATION_OUTPUT=$(cd "$PROJECT_ROOT" && bash -c "$TEST_CMD" 2>&1) || VALIDATION_EXIT=$?
 
-echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"${ESCAPED_MSG}\"}}"
+if [ "$VALIDATION_EXIT" -ne 0 ]; then
+  if [ "$PUSH_MODE" = "block" ]; then
+    # User opted into blocking mode
+    sw_log block pre-push-validate "Tests failed — push blocked (mode: block)"
+    BLOCK_MSG="[shipworthy] Tests failed. Push blocked (you configured rules.push_validation: block).
+
+Command: $TEST_CMD
+Run it manually to see details."
+    ESCAPED_MSG=$(escape_json "$BLOCK_MSG" 2>/dev/null || printf '%s' "$BLOCK_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr '\n' ' ')
+    echo "{\"hookSpecificOutput\":{\"decision\":\"block\",\"reason\":\"${ESCAPED_MSG}\"}}"
+  else
+    # Default: advisory mode — warn but approve
+    sw_log warn pre-push-validate "Tests failed — push approved anyway (advisory mode)"
+    WARN_MSG="[shipworthy] Heads up: '$TEST_CMD' failed. You may want to check that before pushing. Push approved — this is just a suggestion."
+    ESCAPED_MSG=$(printf '%s' "$WARN_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
+    echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"${ESCAPED_MSG}\"}}"
+  fi
+else
+  sw_log info pre-push-validate "Tests passed — push approved"
+  APPROVE_MSG="[shipworthy] Tests passed ($TEST_CMD). Safe to push."
+  ESCAPED_MSG=$(printf '%s' "$APPROVE_MSG" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
+  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"${ESCAPED_MSG}\"}}"
+fi

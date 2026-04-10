@@ -282,14 +282,14 @@ cat > "$TMPDIR/.shipworthy/.session-signals" << 'SIGEOF'
 SIGEOF
 OUTPUT=$(cd "$TMPDIR" && "$SESSION_HOOK" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -q "AUTO-RETRO"; then
-    if echo "$OUTPUT" | grep -q "3 captured signal"; then
+  if echo "$OUTPUT" | grep -q "SESSION SIGNALS"; then
+    if echo "$OUTPUT" | grep -q "3 signal"; then
       pass "Unprocessed signals surfaced with correct count"
     else
-      fail "Auto-retro section found but signal count wrong"
+      fail "Session signals section found but signal count wrong"
     fi
   else
-    fail "AUTO-RETRO section not found with unprocessed signals"
+    fail "SESSION SIGNALS section not found with unprocessed signals"
   fi
 else
   fail "Output is not valid JSON with signals"
@@ -297,34 +297,34 @@ fi
 cleanup "$TMPDIR"
 
 # ---------------------------------------------------------------
-# Test 11: Auto-retro includes signal preview
+# Test 11: Session signals section references /retro
 # ---------------------------------------------------------------
-echo "Test 11: Auto-retro includes signal preview content"
+echo "Test 11: Session signals references /retro command"
 TMPDIR=$(setup_temp_project)
 mkdir -p "$TMPDIR/.shipworthy"
 cat > "$TMPDIR/.shipworthy/.session-signals" << 'SIGEOF'
 2026-04-04T10:00:00|pre-tool-use|security|secret-detected: AWS key in config.ts
 SIGEOF
 OUTPUT=$(cd "$TMPDIR" && "$SESSION_HOOK" 2>/dev/null || true)
-if echo "$OUTPUT" | grep -q "secret-detected"; then
-  pass "Auto-retro preview contains actual signal content"
+if echo "$OUTPUT" | grep -q "retro"; then
+  pass "Session signals section references /retro"
 else
-  fail "Signal content not found in auto-retro preview"
+  fail "Session signals section missing /retro reference"
 fi
 cleanup "$TMPDIR"
 
 # ---------------------------------------------------------------
-# Test 12: No signals -> no auto-retro section
+# Test 12: No signals -> no session signals section
 # ---------------------------------------------------------------
-echo "Test 12: No signals -> no auto-retro section"
+echo "Test 12: No signals -> no session signals section"
 TMPDIR=$(setup_temp_project)
 mkdir -p "$TMPDIR/.shipworthy"
 OUTPUT=$(cd "$TMPDIR" && "$SESSION_HOOK" 2>/dev/null || true)
 if echo "$OUTPUT" | validate_json; then
-  if echo "$OUTPUT" | grep -q "AUTO-RETRO"; then
-    fail "Auto-retro section found when no signals exist"
+  if echo "$OUTPUT" | grep -q "SESSION SIGNALS"; then
+    fail "Session signals section found when no signals exist"
   else
-    pass "No auto-retro section without signals"
+    pass "No session signals section without signals"
   fi
 else
   fail "Output is not valid JSON without signals"

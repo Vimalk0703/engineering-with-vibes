@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Shipworthy — Pre-Tool-Use Hook
-# Fires before Write/Edit operations. Lightweight architecture enforcement.
+# Fires before Write/Edit operations. Lightweight advisory guidance.
 # String-level checks only (no AST) — must be FAST.
-# Advisory only: never blocks, only warns.
+# Advisory only: never blocks, only suggests. Every check is config-gated.
 
 set -euo pipefail
 
@@ -46,19 +46,20 @@ WARNINGS=""
 
 # ============================================================
 # Check 1: Detect secrets and credentials in content
+# Config: rules.secrets (default: enabled)
 # ============================================================
-if [ -n "$CONTENT" ]; then
+if [ -n "$CONTENT" ] && is_rule_enabled "secrets" "$PROJECT_ROOT"; then
   # AWS Access Key IDs (start with AKIA)
   if echo "$CONTENT" | grep -qE 'AKIA[0-9A-Z]{16}'; then
     sw_check pre-tool-use "AWS key detection" warn
     sw_signal "pre-tool-use" "security" "secret-detected: AWS key in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-    WARNINGS="${WARNINGS}AWS Access Key ID detected (AKIA...). Use environment variables or AWS credentials file. "
+    WARNINGS="${WARNINGS}Looks like an AWS Access Key ID (AKIA...). Consider using environment variables or AWS credentials file instead. "
   fi
 
   # Generic secret/password/token/key patterns with values (handles JSON-escaped quotes too)
   if echo "$CONTENT" | grep -qiE '(password|secret|api_key|apikey|api-key|private_key|access_token|auth_token|secret_key|client_secret)[[:space:]]*[:=][[:space:]]*(\\?["\x27])[^"\\]{8,}'; then
     sw_check pre-tool-use "Secrets scan" warn
-    WARNINGS="${WARNINGS}Potential hardcoded secret detected. Use environment variables instead. "
+    WARNINGS="${WARNINGS}This may contain a hardcoded secret. Consider moving it to an environment variable or secrets manager. "
   fi
 
   # Long hex strings (potential tokens/hashes — 40+ hex chars)
@@ -68,7 +69,7 @@ if [ -n "$CONTENT" ]; then
     if ! echo "$CONTENT" | grep -qiE '(commit|sha|hash|ref|digest|checksum)[[:space:]]*[:=]?[[:space:]]*["\x27]?[0-9a-fA-F]{40,}'; then
       if [ -z "$FILE_PATH" ] || { [[ "$FILE_PATH" != *test* ]] && [[ "$FILE_PATH" != *spec* ]] && [[ "$FILE_PATH" != *fixture* ]]; }; then
         sw_check pre-tool-use "Hex token scan" warn
-        WARNINGS="${WARNINGS}Long hex string detected — could be a hardcoded token or key. Verify this is not a secret. "
+        WARNINGS="${WARNINGS}Long hex string detected — worth verifying this isn't a token or key. "
       fi
     fi
   fi
@@ -76,35 +77,37 @@ if [ -n "$CONTENT" ]; then
   # Base64-encoded strings that look like secrets (long base64 after a key-like variable)
   if echo "$CONTENT" | grep -qiE '(key|token|secret|password|credential)[[:space:]]*[:=][[:space:]]*["\x27][A-Za-z0-9+/]{40,}={0,2}["\x27]'; then
     sw_check pre-tool-use "Base64 secrets" warn
-    WARNINGS="${WARNINGS}Potential base64-encoded secret detected. Use environment variables instead. "
+    WARNINGS="${WARNINGS}Possible base64-encoded secret detected. Consider using environment variables instead. "
   fi
 
   # Common API key patterns (sk-..., pk-..., rk_live_, sk_live_, etc.)
   if echo "$CONTENT" | grep -qE '(sk-[a-zA-Z0-9]{20,}|pk-[a-zA-Z0-9]{20,}|sk_live_[a-zA-Z0-9]{20,}|rk_live_[a-zA-Z0-9]{20,}|pk_live_[a-zA-Z0-9]{20,})'; then
     sw_check pre-tool-use "API key pattern" warn
-    WARNINGS="${WARNINGS}API key pattern detected (sk-/pk-/live key). Use environment variables instead. "
+    WARNINGS="${WARNINGS}API key pattern detected (sk-/pk-/live key). Consider using environment variables instead. "
   fi
 fi
 
 # ============================================================
 # Check 2: Detect eval() and Function() constructor calls
+# Config: rules.eval (default: enabled)
 # ============================================================
-if [ -n "$CONTENT" ]; then
+if [ -n "$CONTENT" ] && is_rule_enabled "eval" "$PROJECT_ROOT"; then
   if echo "$CONTENT" | grep -qE 'eval\s*\('; then
     sw_check pre-tool-use "eval() detection" warn
     sw_signal "pre-tool-use" "security" "eval-detected in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-    WARNINGS="${WARNINGS}eval() detected — this is a security risk. Consider safer alternatives. "
+    WARNINGS="${WARNINGS}eval() detected — consider safer alternatives if handling user input. "
   fi
   if echo "$CONTENT" | grep -qE 'new\s+Function\s*\('; then
     sw_check pre-tool-use "Function() detection" warn
-    WARNINGS="${WARNINGS}new Function() constructor detected — equivalent to eval(). Consider safer alternatives. "
+    WARNINGS="${WARNINGS}new Function() detected — similar risks to eval(). Consider alternatives if handling user input. "
   fi
 fi
 
 # ============================================================
 # Check 3: Detect writing to .env files
+# Config: rules.env_files (default: enabled)
 # ============================================================
-if [ -n "$FILE_PATH" ]; then
+if [ -n "$FILE_PATH" ] && is_rule_enabled "env_files" "$PROJECT_ROOT"; then
   BASENAME=$(basename "$FILE_PATH" 2>/dev/null || true)
   if [[ "$BASENAME" == .env* ]]; then
     # Check if .gitignore exists and includes .env
@@ -114,15 +117,17 @@ if [ -n "$FILE_PATH" ]; then
     else
       sw_check pre-tool-use ".env file write" warn
       sw_signal "pre-tool-use" "security" "env-file-write: $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown') not gitignored"
-      WARNINGS="${WARNINGS}Writing to $BASENAME — ensure this file is in .gitignore to prevent committing secrets. "
+      WARNINGS="${WARNINGS}Writing to $BASENAME — consider adding it to .gitignore to avoid committing secrets. "
     fi
   fi
 fi
 
 # ============================================================
 # Check 4: console.log in production code
+# Config: rules.console_log (default: enabled)
+# Also respects legacy override: overrides.allow_console_log
 # ============================================================
-if [ -n "$FILE_PATH" ] && [ -n "$CONTENT" ]; then
+if [ -n "$FILE_PATH" ] && [ -n "$CONTENT" ] && is_rule_enabled "console_log" "$PROJECT_ROOT"; then
   FILE_BASENAME=$(basename "$FILE_PATH" 2>/dev/null || true)
   FILE_DIRNAME=$(dirname "$FILE_PATH" 2>/dev/null || true)
 
@@ -136,7 +141,7 @@ if [ -n "$FILE_PATH" ] && [ -n "$CONTENT" ]; then
   [[ "$FILE_DIRNAME" == */bin/* ]] && SKIP_CONSOLE_CHECK="true"
   [[ "$FILE_DIRNAME" == */scripts/* ]] && SKIP_CONSOLE_CHECK="true"
 
-  # Check project config override
+  # Check project config override (legacy format)
   if [ "$(read_config 'overrides.allow_console_log' "$PROJECT_ROOT" 2>/dev/null)" = "true" ]; then
     SKIP_CONSOLE_CHECK="true"
   fi
@@ -146,7 +151,7 @@ if [ -n "$FILE_PATH" ] && [ -n "$CONTENT" ]; then
     if echo "$CONTENT" | grep -qE '[^/]console\.log\s*\(|^console\.log\s*\('; then
       sw_check pre-tool-use "console.log in prod" warn
       sw_signal "pre-tool-use" "pattern" "console.log in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-      WARNINGS="${WARNINGS}console.log detected in production code — use structured logging instead. "
+      WARNINGS="${WARNINGS}console.log detected — consider using a structured logger for production code. "
     fi
   fi
 fi
@@ -157,8 +162,8 @@ fi
 if [ -n "$WARNINGS" ]; then
   # Escape warnings for JSON
   ESCAPED_WARNINGS=$(printf '%s' "$WARNINGS" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
-  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"[shipworthy] Advisory: ${ESCAPED_WARNINGS}\"}}"
+  echo "{\"hookSpecificOutput\":{\"decision\":\"approve\",\"message\":\"[shipworthy] Suggestion: ${ESCAPED_WARNINGS}\"}}"
 else
-  sw_log security pre-tool-use "All checks passed ✓"
+  sw_log security pre-tool-use "All checks passed"
   echo '{"hookSpecificOutput":{"decision":"approve"}}'
 fi

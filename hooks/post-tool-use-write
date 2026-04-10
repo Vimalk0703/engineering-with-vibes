@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shipworthy — Post-Tool-Use Hook (Write/Edit)
-# Fires after Write/Edit operations. Advisory architecture compliance check.
-# Checks if written file path aligns with project structure conventions.
+# Fires after Write/Edit operations. Advisory guidance on code patterns.
+# Advisory only: never blocks. Every check is config-gated.
 
 set -euo pipefail
 
@@ -44,40 +44,47 @@ MESSAGE=""
 
 # ============================================================
 # Check 1: Test file written outside test directories
+# Config: rules.test_location (default: enabled)
 # ============================================================
-BASENAME=$(basename "$FILE_PATH" 2>/dev/null || true)
-if [[ "$BASENAME" == *test* ]] || [[ "$BASENAME" == *spec* ]] || [[ "$BASENAME" == test_* ]]; then
-  RELATIVE_PATH="${FILE_PATH#$PROJECT_ROOT/}"
-  if [[ "$RELATIVE_PATH" != tests/* ]] && [[ "$RELATIVE_PATH" != __tests__/* ]] && \
-     [[ "$RELATIVE_PATH" != test/* ]] && [[ "$RELATIVE_PATH" != spec/* ]] && \
-     [[ "$RELATIVE_PATH" != */tests/* ]] && [[ "$RELATIVE_PATH" != */__tests__/* ]] && \
-     [[ "$RELATIVE_PATH" != */test/* ]]; then
-    # Check if colocated tests are the convention (test files next to source)
-    if [ -f "$ARCH_SPEC_PATH" ] && grep -qi "colocat" "$ARCH_SPEC_PATH" 2>/dev/null; then
-      : # Colocated tests are the convention, no warning
-    else
-      sw_check post-tool-use-write "Test file location" warn
-      sw_signal "post-tool-use-write" "pattern" "test-misplaced: $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-      MESSAGE="${MESSAGE}Test file written outside standard test directory. If this is intentional (colocated tests), update architecture spec. "
+if is_rule_enabled "test_location" "$PROJECT_ROOT"; then
+  BASENAME=$(basename "$FILE_PATH" 2>/dev/null || true)
+  if [[ "$BASENAME" == *test* ]] || [[ "$BASENAME" == *spec* ]] || [[ "$BASENAME" == test_* ]]; then
+    RELATIVE_PATH="${FILE_PATH#$PROJECT_ROOT/}"
+    if [[ "$RELATIVE_PATH" != tests/* ]] && [[ "$RELATIVE_PATH" != __tests__/* ]] && \
+       [[ "$RELATIVE_PATH" != test/* ]] && [[ "$RELATIVE_PATH" != spec/* ]] && \
+       [[ "$RELATIVE_PATH" != */tests/* ]] && [[ "$RELATIVE_PATH" != */__tests__/* ]] && \
+       [[ "$RELATIVE_PATH" != */test/* ]]; then
+      # Check if colocated tests are the convention (test files next to source)
+      if [ -f "$ARCH_SPEC_PATH" ] && grep -qi "colocat" "$ARCH_SPEC_PATH" 2>/dev/null; then
+        : # Colocated tests are the convention, no warning
+      else
+        sw_check post-tool-use-write "Test file location" warn
+        sw_signal "post-tool-use-write" "pattern" "test-misplaced: $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
+        MESSAGE="${MESSAGE}Test file written outside standard test directory — if you prefer colocated tests, that's fine. "
+      fi
     fi
   fi
 fi
 
 # ============================================================
 # Check 2: TypeScript `: any` usage (post-write verification)
+# Config: rules.any_types (default: enabled)
+# Also respects legacy override: overrides.allow_any_types
 # ============================================================
-if [[ "$FILE_PATH" == *.ts ]] || [[ "$FILE_PATH" == *.tsx ]]; then
-  if [ -f "$FILE_PATH" ]; then
-    BASENAME_CHECK=$(basename "$FILE_PATH" 2>/dev/null || true)
-    if [[ "$BASENAME_CHECK" != *.d.ts ]]; then
-      # Check config override
-      if [ "$(read_config 'overrides.allow_any_types' "$PROJECT_ROOT" 2>/dev/null)" != "true" ]; then
-        # Use word boundary and skip comments (lines starting with // or *)
-        ANY_COUNT=$(grep -v '^\s*//' "$FILE_PATH" 2>/dev/null | grep -v '^\s*\*' | grep -cE ':\s*any\b' 2>/dev/null || echo "0")
-        if [ "$ANY_COUNT" -gt 0 ]; then
-          sw_check post-tool-use-write "TypeScript :any" warn
-          sw_signal "post-tool-use-write" "pattern" "typescript-any: ${ANY_COUNT} instance(s) in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-          MESSAGE="${MESSAGE}TypeScript file contains ${ANY_COUNT} instance(s) of ': any'. Use 'unknown' with type guards instead. "
+if is_rule_enabled "any_types" "$PROJECT_ROOT"; then
+  if [[ "$FILE_PATH" == *.ts ]] || [[ "$FILE_PATH" == *.tsx ]]; then
+    if [ -f "$FILE_PATH" ]; then
+      BASENAME_CHECK=$(basename "$FILE_PATH" 2>/dev/null || true)
+      if [[ "$BASENAME_CHECK" != *.d.ts ]]; then
+        # Check config override (legacy format)
+        if [ "$(read_config 'overrides.allow_any_types' "$PROJECT_ROOT" 2>/dev/null)" != "true" ]; then
+          # Use word boundary and skip comments (lines starting with // or *)
+          ANY_COUNT=$(grep -v '^\s*//' "$FILE_PATH" 2>/dev/null | grep -v '^\s*\*' | grep -cE ':\s*any\b' 2>/dev/null || echo "0")
+          if [ "$ANY_COUNT" -gt 0 ]; then
+            sw_check post-tool-use-write "TypeScript :any" warn
+            sw_signal "post-tool-use-write" "pattern" "typescript-any: ${ANY_COUNT} instance(s) in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
+            MESSAGE="${MESSAGE}Found ${ANY_COUNT} ': any' usage(s) — consider using 'unknown' with type guards for better type safety. "
+          fi
         fi
       fi
     fi
@@ -86,19 +93,27 @@ fi
 
 # ============================================================
 # Check 3: New route handler without validation import
+# Config: rules.route_validation (default: enabled)
+# Detects: zod, joi, yup, class-validator, ajv, valibot,
+#          superstruct, io-ts, typebox, vine, express-validator,
+#          pydantic, marshmallow, cerberus, wtforms
 # ============================================================
-if [ -f "$FILE_PATH" ]; then
-  if grep -qE '(app\.(get|post|put|patch|delete)|router\.(get|post|put|patch|delete)|@(Get|Post|Put|Patch|Delete))' "$FILE_PATH" 2>/dev/null; then
-    if ! grep -qE '(zod|Zod|z\.|Pydantic|pydantic|validator)' "$FILE_PATH" 2>/dev/null; then
-      sw_check post-tool-use-write "Route validation" warn
-      sw_signal "post-tool-use-write" "pattern" "route-no-validation: $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-      MESSAGE="${MESSAGE}Route handler detected without input validation import. Consider adding Zod (JS/TS) or Pydantic (Python). "
+if is_rule_enabled "route_validation" "$PROJECT_ROOT"; then
+  if [ -f "$FILE_PATH" ]; then
+    if grep -qE '(app\.(get|post|put|patch|delete)|router\.(get|post|put|patch|delete)|@(Get|Post|Put|Patch|Delete))' "$FILE_PATH" 2>/dev/null; then
+      # Check for ANY validation library — not just zod/pydantic
+      if ! grep -qiE '(zod|Zod|z\.|joi|Joi|yup|Yup|class-validator|ClassValidator|ajv|Ajv|valibot|superstruct|io-ts|typebox|TypeBox|vine|Vine|express-validator|Pydantic|pydantic|marshmallow|cerberus|wtforms|validator|validate|Validate|ValidationPipe|validation_schema|check_schema)' "$FILE_PATH" 2>/dev/null; then
+        sw_check post-tool-use-write "Route validation" warn
+        sw_signal "post-tool-use-write" "pattern" "route-no-validation: $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
+        MESSAGE="${MESSAGE}Route handler without input validation detected — consider adding a validation library for request data. "
+      fi
     fi
   fi
 fi
 
 # ============================================================
 # Check 4: Regression fence violation detection
+# Config: always enabled if fence file exists (user-defined rules)
 # ============================================================
 FENCE_PATH="$PROJECT_ROOT/.shipworthy/regression-fence.md"
 if [ -f "$FENCE_PATH" ] && [ -f "$FILE_PATH" ]; then
@@ -112,7 +127,7 @@ if [ -f "$FENCE_PATH" ] && [ -f "$FILE_PATH" ]; then
       if [ -n "$forbidden" ] && echo "$WRITTEN_CONTENT" | grep -qi "$forbidden" 2>/dev/null; then
         sw_check post-tool-use-write "Regression fence" warn
         sw_signal "post-tool-use-write" "fence-violation" "${rule_text} in $(basename "$FILE_PATH" 2>/dev/null || echo 'unknown')"
-        MESSAGE="${MESSAGE}Regression fence violation: ${rule_text}. Check .shipworthy/regression-fence.md. "
+        MESSAGE="${MESSAGE}Regression fence note: ${rule_text}. See .shipworthy/regression-fence.md. "
         break  # One warning is enough, don't spam
       fi
     fi
@@ -124,8 +139,8 @@ fi
 # ============================================================
 if [ -n "$MESSAGE" ]; then
   ESCAPED_MSG=$(printf '%s' "$MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g' | tr -d '\n\r')
-  echo "{\"hookSpecificOutput\":{\"message\":\"[shipworthy] Advisory: ${ESCAPED_MSG}\"}}"
+  echo "{\"hookSpecificOutput\":{\"message\":\"[shipworthy] Suggestion: ${ESCAPED_MSG}\"}}"
 else
-  sw_log info post-tool-use-write "Compliance OK ✓"
+  sw_log info post-tool-use-write "All good"
   echo '{}'
 fi
