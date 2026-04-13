@@ -125,7 +125,7 @@ See [RELEASE-NOTES.md](RELEASE-NOTES.md) for full details.
 ### Core (3)
 | Skill | What It Does |
 |-------|-------------|
-| **using-shipworthy** | Master router -- loaded every session, dispatches to relevant skills |
+| **using-shipworthy** | Master routing skill -- loaded at every session start. Defines skill priority and routing. |
 | **architecture-awareness** | Auto-detects project type, generates and enforces architecture spec |
 | **intent-to-spec** | Converts vague requests into detailed specs (invisible for Builder, shown for Engineer) |
 
@@ -189,9 +189,13 @@ See [RELEASE-NOTES.md](RELEASE-NOTES.md) for full details.
 ### Operations (15)
 | Skill | What It Does |
 |-------|-------------|
+| **environment-setup** | Auto-generates .env.example and validates environment configuration |
+| **session-memory** | Cross-session memory system for specs, decisions, and plans |
+| **tech-debt-tracking** | Document shortcuts so they get fixed, not forgotten |
+| **feature-flag-discipline** | Manage feature flags with expiration dates and kill switches |
+| **ci-cd-awareness** | Pipeline design, rollback strategies, and feature flags |
 | **using-git-worktrees** | Isolated workspaces for parallel development branches |
 | **finishing-a-development-branch** | 5-step completion workflow: tests, cleanup, docs, PR, verify |
-| **ci-cd-awareness** | Pipeline design, rollback strategies, feature flags |
 | **tech-debt-tracking** | Document shortcuts so they get fixed, not forgotten |
 | **session-memory** | Cross-session persistence via `.shipworthy/` with INDEX.md, pruning, and consolidation |
 | **production-readiness** | Pre-deployment checklist |
@@ -209,12 +213,12 @@ See [RELEASE-NOTES.md](RELEASE-NOTES.md) for full details.
 | Skill | What It Does |
 |-------|-------------|
 | **accessibility** | WCAG 2.1 AA baseline for every UI component |
-| **frontend-standards** | Component patterns, state management, rendering best practices |
+| **frontend-standards** | Component patterns, state management, and rendering best practices |
 
 ### Documentation (1)
 | Skill | What It Does |
 |-------|-------------|
-| **documentation-as-code** | JSDoc, README sync, ADRs, changelog -- documentation that stays current |
+| **documentation-as-code** | JSDoc, README sync, ADRs, and changelog maintenance |
 
 ### Debugging (1)
 | Skill | What It Does |
